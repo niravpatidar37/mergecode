@@ -23,7 +23,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "commander": "^12.1.0",
     "yaml": "^2.5.1"
   },
   "devDependencies": {
@@ -32,4 +31,3 @@
     "vitest": "^1.6.0"
   }
 }
-
