@@ -1,0 +1,13 @@
+version: 1
+verify:
+  commands:
+    - npm test
+    - npm run typecheck
+rubric:
+  hardGates:
+    failOnVerificationFailure: true
+    failOnDeletedTests: false
+    requestChangesOnDependencyChange: true
+report:
+  format: markdown
+
