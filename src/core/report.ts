@@ -10,16 +10,10 @@ export function renderMarkdown(run: JudgeRun): string {
     `Confidence: ${run.confidence.toFixed(2)}`,
     `Score: ${run.scores.total}/100`,
     "",
-  ];
-
-  if (run.llmSummary) {
-    lines.push("## Maintainer AI Review", "", run.llmSummary, "");
-  }
-
-  lines.push(
+    ...(run.llmSummary ? ["## Maintainer AI Review", "", run.llmSummary, ""] : []),
     "## Review This First",
     "",
-  );
+  ];
 
   if (run.findings.length === 0) {
     lines.push("- No major merge-worthiness findings detected.");
@@ -82,4 +76,3 @@ export function writeReport(repoPath: string, run: JudgeRun): string {
   writeFileSync(join(dir, "run.json"), JSON.stringify(run, null, 2), "utf8");
   return path;
 }
-

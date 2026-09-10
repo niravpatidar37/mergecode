@@ -86,4 +86,3 @@ export function printJudgeSummary(run: JudgeRun): void {
   console.log(renderMarkdown(run));
   if (run.reportPath) console.log(`Report: ${run.reportPath}`);
 }
-

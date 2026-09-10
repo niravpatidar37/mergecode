@@ -55,4 +55,3 @@ export function loadConfig(repoPath: string, explicitPath?: string): MergeCodeCo
     },
   };
 }
-

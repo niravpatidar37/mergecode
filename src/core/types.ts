@@ -96,4 +96,3 @@ export interface JudgeRun {
   reportPath?: string;
   llmSummary?: string;
 }
-
