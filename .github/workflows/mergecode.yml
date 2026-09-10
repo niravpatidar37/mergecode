@@ -1,0 +1,58 @@
+name: mergecode
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  judge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Build PR diff and task
+        env:
+          TASK_TITLE: ${{ github.event.pull_request.title }}
+          TASK_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          git diff "origin/${{ github.base_ref }}...HEAD" > pr.diff
+          printf '%s\n\n%s\n' "$TASK_TITLE" "$TASK_BODY" > task.md
+
+      - name: Run mergecode judge
+        id: judge
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node dist/cli.js judge --repo . --task task.md --patch pr.diff --config mergecode.yaml
+
+      - name: Post verdict comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+            const runsDir = path.join(".mergecode", "runs");
+            if (!fs.existsSync(runsDir)) return;
+            const latest = fs.readdirSync(runsDir).sort().at(-1);
+            const reportPath = path.join(runsDir, latest, "report.md");
+            if (!fs.existsSync(reportPath)) return;
+            const body = fs.readFileSync(reportPath, "utf8");
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
