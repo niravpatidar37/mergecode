@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadConfig } from "../core/config.js";
 import { parseDiffFile } from "../core/diff.js";
 import { evaluatePatch } from "../core/rubric.js";
 import { applyPatch, createWorkspace } from "../core/workspace.js";
 import { runVerification } from "../core/verify.js";
+import { runLlmJudge } from "../core/llm.js";
 import { renderMarkdown, writeReport } from "../core/report.js";
 import type { Finding, JudgeRun } from "../core/types.js";
 
@@ -40,6 +42,26 @@ export async function judge(opts: JudgeOptions): Promise<JudgeRun> {
     ? await runVerification(workspace.path, config.verify.commands, config.verify.timeoutMs)
     : [];
   const evaluation = evaluatePatch({ config, diff, verification });
+  let findings = [...applyFindings, ...evaluation.findings];
+  let verdict = apply.ok ? evaluation.verdict : "REJECT";
+  let llmSummary: string | undefined;
+
+  if (apply.ok && config.llm.enabled) {
+    const llm = await runLlmJudge({
+      config: config.llm,
+      taskText: readFileSync(taskPath, "utf8"),
+      diffText: readFileSync(patchPath, "utf8"),
+      verification,
+    });
+    if (llm) {
+      findings = [...findings, ...llm.findings];
+      llmSummary = llm.summary || undefined;
+      if (verdict === "MERGE" && llm.findings.some((f) => f.severity === "high" || f.severity === "medium")) {
+        verdict = "REQUEST_CHANGES";
+      }
+    }
+  }
+
   const run: JudgeRun = {
     id: `run_${randomUUID().slice(0, 8)}`,
     repoPath,
@@ -49,10 +71,11 @@ export async function judge(opts: JudgeOptions): Promise<JudgeRun> {
     completedAt: new Date().toISOString(),
     verification,
     diff,
-    findings: [...applyFindings, ...evaluation.findings],
+    findings,
     scores: apply.ok ? evaluation.scores : { ...evaluation.scores, correctness: 0, total: 0 },
-    verdict: apply.ok ? evaluation.verdict : "REJECT",
+    verdict,
     confidence: apply.ok ? evaluation.confidence : 0.95,
+    llmSummary,
   };
   if (!opts.noReport) run.reportPath = writeReport(repoPath, run);
   workspace.cleanup();
@@ -63,3 +86,4 @@ export function printJudgeSummary(run: JudgeRun): void {
   console.log(renderMarkdown(run));
   if (run.reportPath) console.log(`Report: ${run.reportPath}`);
 }
+

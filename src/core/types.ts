@@ -21,6 +21,12 @@ export interface MergeCodeConfig {
       requestChangesOnDependencyChange: boolean;
     };
   };
+  llm: {
+    enabled: boolean;
+    model: string;
+    apiKeyEnv: string;
+    maxDiffChars: number;
+  };
 }
 
 export interface VerificationResult {
@@ -88,4 +94,6 @@ export interface JudgeRun {
   verdict: Verdict;
   confidence: number;
   reportPath?: string;
+  llmSummary?: string;
 }
+

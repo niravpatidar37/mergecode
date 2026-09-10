@@ -16,6 +16,12 @@ export const defaultConfig: MergeCodeConfig = {
       requestChangesOnDependencyChange: true,
     },
   },
+  llm: {
+    enabled: false,
+    model: "claude-sonnet-5",
+    apiKeyEnv: "ANTHROPIC_API_KEY",
+    maxDiffChars: 12_000,
+  },
 };
 
 export function loadConfig(repoPath: string, explicitPath?: string): MergeCodeConfig {
@@ -41,5 +47,12 @@ export function loadConfig(repoPath: string, explicitPath?: string): MergeCodeCo
           defaultConfig.rubric.hardGates.requestChangesOnDependencyChange,
       },
     },
+    llm: {
+      enabled: parsed.llm?.enabled ?? defaultConfig.llm.enabled,
+      model: parsed.llm?.model ?? defaultConfig.llm.model,
+      apiKeyEnv: parsed.llm?.apiKeyEnv ?? defaultConfig.llm.apiKeyEnv,
+      maxDiffChars: parsed.llm?.maxDiffChars ?? defaultConfig.llm.maxDiffChars,
+    },
   };
 }
+

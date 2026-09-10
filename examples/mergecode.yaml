@@ -8,6 +8,11 @@ rubric:
     failOnVerificationFailure: true
     failOnDeletedTests: false
     requestChangesOnDependencyChange: true
+llm:
+  enabled: false
+  model: claude-sonnet-5
+  apiKeyEnv: ANTHROPIC_API_KEY
+  maxDiffChars: 12000
 report:
   format: markdown
 
