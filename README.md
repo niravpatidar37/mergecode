@@ -135,4 +135,4 @@ Set `ANTHROPIC_API_KEY` in your environment (or as a repo secret for CI). The LL
 
 ## License
 
-MIT — forked from and inspired by [mihhhir08/mergecode](https://github.com/mihhhir08/mergecode).
+MIT
