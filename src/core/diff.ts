@@ -79,9 +79,10 @@ export function classify(path: string): FileChange["category"] {
 const ASSERTION =
   /\b(expect|should|toBe|toEqual|assertEquals|assertTrue|assertFalse|assertRaises|require\.\w+|assert\.\w+)\b|\bassert\b(?!_)|\b(?:debug_|prop_)?assert(?:_eq|_ne|_matches)?!|\bpytest\.raises\b/;
 
-// Markers that disable or narrow tests.
+// Markers that disable or narrow tests. Anchored to the start of the line so that
+// mentions inside strings, comments or fixtures are not counted.
 const SKIP =
-  /\b(describe|it|test)\.(skip|only|todo)\b|(?<![.\w])(xit|xdescribe|fit|fdescribe)\(|#\[ignore\b|@pytest\.mark\.(skip|skipif|xfail)\b|\bpytest\.(skip|xfail)\(|@unittest\.skip|\bt\.Skip(Now|f)?\(/;
+  /^\s*(?:(?:describe|it|test)\.(?:skip|only|todo)\b|(?:xit|xdescribe|fit|fdescribe)\(|#\[ignore\b|@pytest\.mark\.(?:skip|skipif|xfail)\b|pytest\.(?:skip|xfail)\(|@unittest\.skip|t\.Skip(?:Now|f)?\()/;
 
 // Rust unit tests live next to the code they test.
 const RUST_INLINE_TEST = /#\[(?:[\w:]+::)?test\]|#\[cfg\(test\)\]|\bproptest!/;

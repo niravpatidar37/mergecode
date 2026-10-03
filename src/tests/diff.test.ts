@@ -106,6 +106,22 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
     const summary = parseUnifiedDiff(fileDiff("src/lock.rs", "+    #[ignore]\n+    #[test]\n+    fn flaky() {}"));
     expect(summary.addedSkips).toBe(1);
   });
+
+  it("only counts skip markers that start a statement, not ones inside strings or comments", () => {
+    const summary = parseUnifiedDiff(
+      fileDiff(
+        "src/tests/x.test.ts",
+        [
+          '+    const fixture = "it.skip(\\"later\\")";',
+          "+    // TODO: never use test.only here",
+          '+    expect(parse("#[ignore]")).toBe(1);',
+          "+  it.only('focused', () => {});",
+          "+  describe.skip('suite', () => {});",
+        ].join("\n"),
+      ) + fileDiff("e2e/test_a.py", "+@pytest.mark.skip(reason='x')\n+    pytest.skip('y')\n+    msg = 'pytest.skip(z)'"),
+    );
+    expect(summary.addedSkips).toBe(4);
+  });
 });
 
 describe("classify", () => {
