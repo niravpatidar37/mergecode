@@ -41,4 +41,14 @@ describe("loadConfig", () => {
   it("rejects an explicit config path that does not exist", () => {
     expect(() => loadConfig(tmpdir(), join(tmpdir(), "does-not-exist-mergecode.yaml"))).toThrow(/not found/);
   });
+
+  it("rejects unknown or misspelled keys instead of silently using defaults", () => {
+    expect(() => loadConfig(withConfig("rubric:\n  hardgates:\n    failOnDeletedTests: true\n"))).toThrow(/rubric\.hardgates/);
+    expect(() => loadConfig(withConfig("rubric:\n  hardGates:\n    failOnDeletedTest: true\n"))).toThrow(/failOnDeletedTest/);
+    expect(() => loadConfig(withConfig("verfiy:\n  commands: [x]\n"))).toThrow(/verfiy/);
+  });
+
+  it("caps timeouts at a value setTimeout can represent", () => {
+    expect(() => loadConfig(withConfig("verify:\n  timeoutMs: 3000000000\n"))).toThrow(/verify\.timeoutMs/);
+  });
 });

@@ -49,6 +49,8 @@ export interface FileChange {
   addedSkips: number;
   /** True for test files, and for source files whose diff adds inline tests (e.g. Rust #[test]). */
   touchesTests?: boolean;
+  /** Previous path when the file was renamed or copied. */
+  oldPath?: string;
 }
 
 export interface DiffSummary {
@@ -61,6 +63,8 @@ export interface DiffSummary {
   ciFilesTouched: string[];
   deletedAssertions: number;
   addedSkips: number;
+  /** Runnable test files that were deleted or renamed to a non-test name. */
+  removedTestFiles?: string[];
 }
 
 export interface Finding {

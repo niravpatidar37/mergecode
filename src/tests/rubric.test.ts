@@ -33,5 +33,17 @@ describe("evaluatePatch", () => {
     const result = evaluatePatch({ config: defaultConfig, diff, verification: [] });
     expect(result.verdict).toBe("REQUEST_CHANGES");
   });
+
+  it("flags removed test files, and rejects them when deleted tests are a hard gate", () => {
+    const diff = { ...cleanDiff, removedTestFiles: ["src/auth.test.ts"] };
+    const soft = evaluatePatch({ config: defaultConfig, diff, verification: [] });
+    expect(soft.verdict).toBe("REQUEST_CHANGES");
+    expect(soft.findings.some((f) => f.title === "Test files removed")).toBe(true);
+    const strict = {
+      ...defaultConfig,
+      rubric: { hardGates: { ...defaultConfig.rubric.hardGates, failOnDeletedTests: true } },
+    };
+    expect(evaluatePatch({ config: strict, diff, verification: [] }).verdict).toBe("REJECT");
+  });
 });
 

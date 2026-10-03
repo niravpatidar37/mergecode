@@ -8,7 +8,7 @@ const KILL_GRACE_MS = 3_000;
 // Verification commands run code from the candidate patch, which is untrusted by
 // design. They must never inherit credentials from the judging process.
 const SECRET_NAME =
-  /(SECRET|TOKEN|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|PRIVATE|API_?KEY|ACCESS_?KEY|AUTH|COOKIE|SESSION|_KEY$|^KEY$)/i;
+  /(SECRET|TOKEN|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|PRIVATE|API_?KEY|ACCESS_?KEY|AUTH|COOKIE|SESSION|DSN|DATABASE_URL|CONNECTION_STRING|_PAT$|_KEY$|^KEY$)/i;
 
 // GitHub Actions file commands: a verification command that can write to these could
 // set step outputs (e.g. forge the verdict) or inject env vars into later steps.
@@ -118,6 +118,8 @@ async function runOne(
     });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
+      // Background processes a command left in its process group must not outlive it.
+      if (process.platform !== "win32") killTree(child.pid, "SIGKILL");
       finish(code, signal);
     });
   });

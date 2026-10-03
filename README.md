@@ -83,6 +83,7 @@ and, ultimately, a human are for. MergeCode tells you where to look first.
 | Verification commands fail or time out | any (you configure the commands) | `REJECT` (configurable) |
 | Skipped or focused tests added: `.skip`, `.only`, `#[ignore]`, `pytest.mark.skip`, `t.Skip` | JS/TS, Rust, Python, Go | `REJECT` |
 | Assertions deleted from tests, including Rust inline `#[cfg(test)]` modules | JS/TS, Rust, Python, Go | `REQUEST_CHANGES` (or `REJECT` with `failOnDeletedTests`) |
+| Test files deleted, or renamed so the runner no longer picks them up | all | `REQUEST_CHANGES` (or `REJECT` with `failOnDeletedTests`) |
 | Source changed without touching tests (Rust inline `#[test]` counts) | all | `REQUEST_CHANGES` |
 | Dependency manifests or lockfiles changed | npm, yarn, pnpm, bun, Cargo, uv, Poetry, pip, Go, Bundler, Maven, Gradle | `REQUEST_CHANGES` |
 | CI workflows changed | GitHub Actions, GitLab CI, CircleCI | `REQUEST_CHANGES` |

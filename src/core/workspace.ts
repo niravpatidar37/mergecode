@@ -1,20 +1,20 @@
 import { cpSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, relative, sep } from "node:path";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 
-// Build output, caches and VCS metadata: never needed to judge a patch and often huge.
-const EXCLUDES = new Set([
-  ".git",
-  "node_modules",
-  ".mergecode",
-  "dist",
-  "coverage",
-  "target",
-  ".venv",
-  "__pycache__",
-  ".pytest_cache",
-]);
+// VCS metadata, installed dependencies and caches: excluded at any depth.
+const EXCLUDE_ANYWHERE = new Set([".git", "node_modules", ".venv", "__pycache__", ".pytest_cache"]);
+// Build output: excluded only at the repo root, so source dirs such as src/dist/ or
+// pkg/target/ are still copied (otherwise a patch touching them could not apply).
+const EXCLUDE_AT_ROOT = new Set([".mergecode", "dist", "coverage", "target"]);
+
+/** Node 20's cpSync passes Win32 namespaced paths (\\?\C:\...) to the filter; normalise them. */
+function stripWin32Namespace(p: string): string {
+  if (p.startsWith("\\\\?\\UNC\\")) return `\\\\${p.slice(8)}`;
+  if (p.startsWith("\\\\?\\")) return p.slice(4);
+  return p;
+}
 
 export interface Workspace {
   path: string;
@@ -30,14 +30,18 @@ export function createWorkspace(repoPath: string, keep = false): Workspace {
   try {
     cpSync(repoPath, target, {
       recursive: true,
-      // Symlinks are copied as links, never followed, so a link in the repo cannot
-      // pull files from outside it into the workspace.
+      // Symlinks are copied as links rather than followed, so the copy itself never
+      // reads outside the repo. Absolute links still point outside the workspace.
       verbatimSymlinks: true,
       filter: (src) => {
-        const rel = relative(repoPath, src);
-        // Only exclude by path *inside* the repo, so a repo that itself lives under
+        // Judge by the path *inside* the repo, so a repo that itself lives under
         // e.g. /home/me/dist/ is still copied.
-        return !rel.split(sep).some((part) => EXCLUDES.has(part));
+        const rel = relative(stripWin32Namespace(repoPath), stripWin32Namespace(src));
+        // Fail loudly rather than silently copying something we cannot place in the repo.
+        if (rel.startsWith("..") || isAbsolute(rel)) throw new Error(`Unexpected path outside the repo: ${src}`);
+        const parts = rel.split(sep);
+        if (parts[0] !== undefined && EXCLUDE_AT_ROOT.has(parts[0])) return false;
+        return !parts.some((part) => EXCLUDE_ANYWHERE.has(part));
       },
     });
   } catch (err) {
