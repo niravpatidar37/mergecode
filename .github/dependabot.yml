@@ -15,7 +15,7 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
     ignore:
-      # Types must match the oldest supported runtime (engines.node >= 20), or code
+      # Types must match the oldest supported runtime (engines.node >= 22.12), or code
       # could compile against APIs that do not exist there. Bump with engines.node.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]

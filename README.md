@@ -14,7 +14,7 @@
 <p align="center">
   <a href="https://github.com/niravpatidar37/mergecode/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/niravpatidar37/mergecode/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-1A7F37"></a>
-  <img alt="Node 20+" src="https://img.shields.io/badge/node-%3E%3D20-0B0F14">
+  <img alt="Node 22.12+" src="https://img.shields.io/badge/node-%3E%3D22.12-0B0F14">
   <img alt="Status: early preview" src="https://img.shields.io/badge/status-early%20preview-9AA4B2">
 </p>
 
