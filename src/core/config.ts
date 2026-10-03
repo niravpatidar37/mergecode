@@ -32,6 +32,19 @@ class ConfigError extends Error {
 
 type Obj = Record<string, unknown>;
 
+/** Largest delay setTimeout supports; larger values fire after ~1ms. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/** Misspelled keys would otherwise be silently ignored and defaults applied. */
+function onlyKeys(obj: Obj, allowed: string[], path: string, where: string): void {
+  for (const key of Object.keys(obj)) {
+    if (!allowed.includes(key)) {
+      const at = where ? `${where}.${key}` : key;
+      throw new ConfigError(path, `unknown key "${at}" (allowed: ${allowed.join(", ")})`);
+    }
+  }
+}
+
 function section(parent: Obj, key: string, path: string, where: string): Obj {
   const value = parent[key];
   if (value === undefined || value === null) return {};
@@ -55,11 +68,11 @@ function str(obj: Obj, key: string, fallback: string, path: string, where: strin
   return value;
 }
 
-function posInt(obj: Obj, key: string, fallback: number, path: string, where: string): number {
+function posInt(obj: Obj, key: string, fallback: number, path: string, where: string, max: number): number {
   const value = obj[key];
   if (value === undefined) return fallback;
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    throw new ConfigError(path, `${where}.${key} must be a positive integer`);
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0 || value > max) {
+    throw new ConfigError(path, `${where}.${key} must be a positive integer no greater than ${max}`);
   }
   return value;
 }
@@ -74,6 +87,8 @@ export function loadConfig(repoPath: string, explicitPath?: string): MergeCodeCo
   if (parsed === null || parsed === undefined) return defaultConfig;
   if (typeof parsed !== "object" || Array.isArray(parsed)) throw new ConfigError(path, "top level must be a mapping");
   const root = parsed as Obj;
+  // `report` is accepted for compatibility with the documented example config.
+  onlyKeys(root, ["version", "verify", "rubric", "llm", "report"], path, "");
 
   const verify = section(root, "verify", path, "verify");
   const commands = verify.commands ?? [];
@@ -84,6 +99,10 @@ export function loadConfig(repoPath: string, explicitPath?: string): MergeCodeCo
   const rubric = section(root, "rubric", path, "rubric");
   const gates = section(rubric, "hardGates", path, "rubric.hardGates");
   const llm = section(root, "llm", path, "llm");
+  onlyKeys(verify, ["commands", "timeoutMs"], path, "verify");
+  onlyKeys(rubric, ["hardGates"], path, "rubric");
+  onlyKeys(gates, ["failOnVerificationFailure", "failOnDeletedTests", "requestChangesOnDependencyChange"], path, "rubric.hardGates");
+  onlyKeys(llm, ["enabled", "model", "apiKeyEnv", "maxDiffChars"], path, "llm");
   const d = defaultConfig;
   const g = "rubric.hardGates";
 
@@ -91,7 +110,7 @@ export function loadConfig(repoPath: string, explicitPath?: string): MergeCodeCo
     version: 1,
     verify: {
       commands: commands as string[],
-      timeoutMs: posInt(verify, "timeoutMs", d.verify.timeoutMs, path, "verify"),
+      timeoutMs: posInt(verify, "timeoutMs", d.verify.timeoutMs, path, "verify", MAX_TIMEOUT_MS),
     },
     rubric: {
       hardGates: {
@@ -110,7 +129,7 @@ export function loadConfig(repoPath: string, explicitPath?: string): MergeCodeCo
       enabled: bool(llm, "enabled", d.llm.enabled, path, "llm"),
       model: str(llm, "model", d.llm.model, path, "llm"),
       apiKeyEnv: str(llm, "apiKeyEnv", d.llm.apiKeyEnv, path, "llm"),
-      maxDiffChars: posInt(llm, "maxDiffChars", d.llm.maxDiffChars, path, "llm"),
+      maxDiffChars: posInt(llm, "maxDiffChars", d.llm.maxDiffChars, path, "llm", 1_000_000),
     },
   };
 }

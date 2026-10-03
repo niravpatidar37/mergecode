@@ -6,6 +6,13 @@ import type { JudgeRun } from "./types.js";
 export const MAX_REPORT_CHARS = 60_000;
 const MAX_FIELD = 1000;
 const MAX_FILES_LISTED = 200;
+// C0/C1 controls (except tab/newline handled separately) and Unicode bidi overrides/isolates.
+const CONTROL_AND_BIDI = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+/** For text placed inside a `code span`: markdown is inert there, but controls and bidi are not. */
+function codeSpanSafe(text: string): string {
+  return text.replace(CONTROL_AND_BIDI, "").replace(/[`\r\n]/g, "").slice(0, 300);
+}
 
 /**
  * Renders untrusted text (file paths from the diff, LLM output, PR-derived strings)
@@ -15,7 +22,7 @@ const MAX_FILES_LISTED = 200;
  */
 export function inert(text: string, max = MAX_FIELD): string {
   const oneLine = text
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, "")
+    .replace(CONTROL_AND_BIDI, "")
     .replace(/\s*[\r\n]+\s*/g, " ")
     .trim();
   const clipped = oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
@@ -48,7 +55,7 @@ export function renderMarkdown(run: JudgeRun): string {
   } else {
     for (const finding of run.findings.slice(0, 8)) {
       lines.push(`- **${finding.severity.toUpperCase()} ${finding.category}: ${inert(finding.title, 200)}**`);
-      lines.push(`  ${inert(finding.detail)}${finding.file ? ` (\`${finding.file.replace(/[`\r\n]/g, "")}\`)` : ""}`);
+      lines.push(`  ${inert(finding.detail)}${finding.file ? ` (\`${codeSpanSafe(finding.file)}\`)` : ""}`);
     }
   }
 
@@ -75,6 +82,10 @@ export function renderMarkdown(run: JudgeRun): string {
     `- Deleted assertions: ${run.diff.deletedAssertions}`,
     `- Added skip/only markers: ${run.diff.addedSkips}`,
   );
+
+  if ((run.diff.removedTestFiles ?? []).length > 0) {
+    lines.push(`- Removed test files: ${run.diff.removedTestFiles!.map((p) => inert(p, 200)).join(", ")}`);
+  }
 
   if (run.diff.dependencyFilesTouched.length > 0) {
     lines.push(`- Dependency files: ${run.diff.dependencyFilesTouched.map((p) => inert(p, 200)).join(", ")}`);

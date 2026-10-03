@@ -74,98 +74,197 @@ export function classify(path: string): FileChange["category"] {
   return "unknown";
 }
 
-// Assertion-like lines across JS/TS (vitest/jest), Python (assert/pytest/unittest),
-// Rust (assert!/assert_eq!/prop_assert!...) and Go (testify).
-const ASSERTION =
-  /\b(expect|should|toBe|toEqual|assertEquals|assertTrue|assertFalse|assertRaises|require\.\w+|assert\.\w+)\b|\bassert\b(?!_)|\b(?:debug_|prop_)?assert(?:_eq|_ne|_matches)?!|\bpytest\.raises\b/;
+const RUNNABLE_EXT = /\.([cm]?[jt]sx?|py|go|rs|java|kt|rb|cs|swift|php)$/;
+
+/** A test file that a test runner would actually execute (not fixtures or snapshots). */
+function isRunnableTest(path: string): boolean {
+  return classify(path) === "test" && RUNNABLE_EXT.test(basename(path));
+}
+
+// Assertion-like lines, per language, so e.g. Rust's Result::expect(...) or the word
+// "should" in a comment is not mistaken for an assertion.
+const ASSERTION_BY_LANG: [RegExp, RegExp][] = [
+  [/\.[cm]?[jt]sx?$/, /\b(?:expect|assert(?:\.\w+)?)\s*\(|\.should\b|\.(?:toBe|toEqual|toStrictEqual|toThrow|toMatch|toContain|toHaveBeenCalled)\w*\s*\(/],
+  [/\.py$/, /^\s*assert\b|\bself\.assert[A-Z]\w*\s*\(|\bassert[A-Z]\w*\s*\(|\bpytest\.raises\b/],
+  [/\.rs$/, /\b(?:debug_|prop_)?assert(?:_eq|_ne|_matches)?!\s*[([{]/],
+  [/\.go$/, /\b(?:assert|require)\.\w+\s*\(|\bt\.(?:Error|Errorf|Fatal|Fatalf|Fail|FailNow)\s*\(/],
+];
+const ASSERTION_FALLBACK = /\bassert\w*\b|\bexpect\s*\(/;
+
+function assertionPattern(path: string): RegExp {
+  return ASSERTION_BY_LANG.find(([ext]) => ext.test(path))?.[1] ?? ASSERTION_FALLBACK;
+}
 
 // Markers that disable or narrow tests. Anchored to the start of the line so that
-// mentions inside strings, comments or fixtures are not counted.
+// mentions inside strings, comments or fixtures are not counted; Jasmine-style
+// xit/fit/... must look like a test declaration (string title first), so an ordinary
+// `fit(model, data)` call is not a "focused test".
 const SKIP =
-  /^\s*(?:(?:describe|it|test)\.(?:skip|only|todo)\b|(?:xit|xdescribe|fit|fdescribe)\(|#\[ignore\b|@pytest\.mark\.(?:skip|skipif|xfail)\b|pytest\.(?:skip|xfail)\(|@unittest\.skip|t\.Skip(?:Now|f)?\()/;
+  /^\s*(?:(?:describe|it|test)\.(?:skip|only|todo)\b|(?:xit|xdescribe|fit|fdescribe)\(\s*['"`]|#\[ignore\b|@pytest\.mark\.(?:skip|skipif|xfail)\b|pytest\.(?:skip|xfail)\(|@unittest\.skip|t\.Skip(?:Now|f)?\()/;
 
 // Rust unit tests live next to the code they test.
-const RUST_INLINE_TEST = /#\[(?:[\w:]+::)?test\]|#\[cfg\(test\)\]|\bproptest!/;
+const RUST_INLINE_TEST = /#\[(?:[\w:]+::)?test\]|#\[cfg\(test\)\]|\bproptest!|\bmod tests\b/;
 
-interface FileState extends FileChange {
+/** Decodes git's C-style quoted paths ("a/d\303\251ploy.yml") to UTF-8. */
+export function unquoteGitPath(raw: string): string {
+  if (!raw.startsWith('"') || !raw.endsWith('"') || raw.length < 2) return raw;
+  const bytes: number[] = [];
+  const s = raw.slice(1, -1);
+  const simple: Record<string, number> = { n: 10, t: 9, r: 13, a: 7, b: 8, f: 12, v: 11, '"': 34, "\\": 92 };
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!;
+    if (ch !== "\\") {
+      bytes.push(...Buffer.from(ch, "utf8"));
+      continue;
+    }
+    const next = s[i + 1] ?? "";
+    if (/[0-7]/.test(next)) {
+      const oct = s.slice(i + 1, i + 4).match(/^[0-7]{1,3}/)![0];
+      bytes.push(parseInt(oct, 8));
+      i += oct.length;
+    } else {
+      bytes.push(simple[next] ?? next.charCodeAt(0));
+      i += 1;
+    }
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+/** Strips the a/ or b/ prefix from a (possibly quoted) header path; null for /dev/null. */
+function headerPath(raw: string): string | null {
+  const p = unquoteGitPath(raw.trim());
+  if (p === "/dev/null") return null;
+  return p.replace(/^[ab]\//, "");
+}
+
+/** Best-effort split of the `diff --git` line; exact paths come from later headers. */
+function gitLinePaths(rest: string): { a: string; b: string } {
+  const quoted = rest.match(/^("(?:[^"\\]|\\.)*"|\S+) ("(?:[^"\\]|\\.)*"|\S+)$/);
+  if (quoted && (rest.startsWith('"') || rest.endsWith('"'))) {
+    return { a: headerPath(quoted[1]!) ?? "", b: headerPath(quoted[2]!) ?? "" };
+  }
+  const plain = rest.match(/^a\/(.+?) b\/(.+)$/);
+  return { a: plain?.[1] ?? "unknown", b: plain?.[2] ?? "unknown" };
+}
+
+interface FileState {
+  oldPath: string;
+  newPath: string;
+  deletedFile: boolean;
+  added: number;
+  deleted: number;
+  addedSkips: number;
   hasInlineTests: boolean;
   addedInlineTests: boolean;
   candidateDeletedAssertions: number;
 }
 
 export function parseUnifiedDiff(raw: string): DiffSummary {
-  const files = new Map<string, FileState>();
+  const states: FileState[] = [];
   let current: FileState | undefined;
   let inHunk = false;
 
   for (const rawLine of raw.split("\n")) {
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
     if (line.startsWith("diff --git ")) {
-      const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
-      const path = match?.[2] ?? "unknown";
-      const category = classify(path);
+      const { a, b } = gitLinePaths(line.slice("diff --git ".length));
       current = {
-        path,
+        oldPath: a,
+        newPath: b,
+        deletedFile: false,
         added: 0,
         deleted: 0,
-        isTest: category === "test",
-        category,
-        deletedAssertions: 0,
         addedSkips: 0,
         hasInlineTests: false,
         addedInlineTests: false,
         candidateDeletedAssertions: 0,
       };
-      files.set(path, current);
+      states.push(current);
       inHunk = false;
       continue;
     }
     if (!current) continue;
+
+    if (!inHunk) {
+      // Extended headers: these give exact, unambiguous paths.
+      if (line.startsWith("rename from ") || line.startsWith("copy from ")) {
+        current.oldPath = unquoteGitPath(line.replace(/^(rename|copy) from /, ""));
+      } else if (line.startsWith("rename to ") || line.startsWith("copy to ")) {
+        current.newPath = unquoteGitPath(line.replace(/^(rename|copy) to /, ""));
+      } else if (line.startsWith("deleted file mode")) {
+        current.deletedFile = true;
+      } else if (line.startsWith("--- ")) {
+        const p = headerPath(line.slice(4));
+        if (p !== null) current.oldPath = p;
+      } else if (line.startsWith("+++ ")) {
+        const p = headerPath(line.slice(4));
+        if (p === null) current.deletedFile = true;
+        else current.newPath = p;
+      }
+    }
+
     if (line.startsWith("@@")) {
       inHunk = true;
+      // The text after the second @@ is the enclosing function/module (e.g. "mod tests {").
+      const context = line.replace(/^@@[^@]*@@/, "");
+      if (current.newPath.endsWith(".rs") && RUST_INLINE_TEST.test(context)) current.hasInlineTests = true;
       continue;
     }
-    // Header lines (---/+++, index, mode, rename) only appear before the first hunk.
     if (!inHunk) continue;
 
+    const path = current.deletedFile ? current.oldPath : current.newPath;
+    const category = classify(path);
     const body = line.slice(1);
-    if (current.path.endsWith(".rs") && RUST_INLINE_TEST.test(body)) current.hasInlineTests = true;
+    if (path.endsWith(".rs") && RUST_INLINE_TEST.test(body)) current.hasInlineTests = true;
 
     if (line.startsWith("+")) {
       current.added++;
       // Only code can skip a test; docs that *mention* `.skip` or `#[ignore]` must not count.
-      if ((current.category === "test" || current.category === "source") && SKIP.test(body)) current.addedSkips++;
-      if (current.path.endsWith(".rs") && RUST_INLINE_TEST.test(body)) current.addedInlineTests = true;
+      if ((category === "test" || category === "source") && SKIP.test(body)) current.addedSkips++;
+      if (path.endsWith(".rs") && RUST_INLINE_TEST.test(body)) current.addedInlineTests = true;
     } else if (line.startsWith("-")) {
       current.deleted++;
-      if (ASSERTION.test(body)) current.candidateDeletedAssertions++;
+      if (assertionPattern(path).test(body)) current.candidateDeletedAssertions++;
     }
   }
 
-  const list: FileChange[] = [...files.values()].map((f) => {
-    const testy = f.isTest || f.hasInlineTests;
-    return {
-      path: f.path,
+  const list: FileChange[] = [];
+  const removedTestFiles: string[] = [];
+  const touched = { dependency: new Set<string>(), config: new Set<string>(), ci: new Set<string>() };
+
+  for (const f of states) {
+    const path = f.deletedFile ? f.oldPath : f.newPath;
+    const category = classify(path);
+    const isTest = category === "test";
+    for (const p of new Set([f.oldPath, f.newPath])) {
+      const c = classify(p);
+      if (c === "dependency" || c === "config" || c === "ci") touched[c].add(p);
+    }
+    if (isRunnableTest(f.oldPath) && (f.deletedFile || !isRunnableTest(f.newPath))) removedTestFiles.push(f.oldPath);
+    list.push({
+      path,
+      ...(f.oldPath !== f.newPath && !f.deletedFile ? { oldPath: f.oldPath } : {}),
       added: f.added,
       deleted: f.deleted,
-      isTest: f.isTest,
-      category: f.category,
-      deletedAssertions: testy ? f.candidateDeletedAssertions : 0,
+      isTest,
+      category,
+      deletedAssertions: isTest || f.hasInlineTests ? f.candidateDeletedAssertions : 0,
       addedSkips: f.addedSkips,
-      touchesTests: f.isTest || f.addedInlineTests,
-    };
-  });
+      touchesTests: isTest || f.addedInlineTests,
+    });
+  }
 
   return {
     files: list,
     totalAdded: list.reduce((sum, f) => sum + f.added, 0),
     totalDeleted: list.reduce((sum, f) => sum + f.deleted, 0),
     testFilesTouched: list.filter((f) => f.touchesTests).length,
-    dependencyFilesTouched: list.filter((f) => f.category === "dependency").map((f) => f.path),
-    configFilesTouched: list.filter((f) => f.category === "config").map((f) => f.path),
-    ciFilesTouched: list.filter((f) => f.category === "ci").map((f) => f.path),
+    dependencyFilesTouched: [...touched.dependency],
+    configFilesTouched: [...touched.config],
+    ciFilesTouched: [...touched.ci],
     deletedAssertions: list.reduce((sum, f) => sum + f.deletedAssertions, 0),
     addedSkips: list.reduce((sum, f) => sum + f.addedSkips, 0),
+    removedTestFiles,
   };
 }
 

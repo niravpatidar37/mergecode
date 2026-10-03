@@ -42,6 +42,17 @@ export function evaluatePatch(input: {
     });
   }
 
+  const removedTests = input.diff.removedTestFiles ?? [];
+  for (const file of removedTests) {
+    findings.push({
+      severity: input.config.rubric.hardGates.failOnDeletedTests ? "high" : "medium",
+      category: "tests",
+      title: "Test files removed",
+      detail: "A test file was deleted or renamed so the test runner no longer picks it up.",
+      file,
+    });
+  }
+
   if (input.diff.testFilesTouched === 0 && input.diff.files.some((f) => f.category === "source")) {
     findings.push({
       severity: "medium",
@@ -82,7 +93,7 @@ export function evaluatePatch(input: {
 
   const scores: ScoreBreakdown = {
     correctness: clamp(100 - failedCommands.length * 50),
-    tests: clamp(100 - input.diff.deletedAssertions * 25 - input.diff.addedSkips * 50 - (input.diff.testFilesTouched === 0 ? 20 : 0)),
+    tests: clamp(100 - input.diff.deletedAssertions * 25 - removedTests.length * 50 - input.diff.addedSkips * 50 - (input.diff.testFilesTouched === 0 ? 20 : 0)),
     scope: clamp(100 - Math.max(0, changedFiles - 4) * 8 - Math.max(0, changedLines - 200) / 10),
     architecture: clamp(100 - input.diff.configFilesTouched.length * 10 - (changedFiles > 12 ? 25 : 0)),
     risk: clamp(100 - input.diff.dependencyFilesTouched.length * 20 - input.diff.ciFilesTouched.length * 20),
@@ -101,7 +112,7 @@ export function evaluatePatch(input: {
   let verdict: Verdict = "MERGE";
   if (
     (input.config.rubric.hardGates.failOnVerificationFailure && failedCommands.length > 0) ||
-    (input.config.rubric.hardGates.failOnDeletedTests && input.diff.deletedAssertions > 0) ||
+    (input.config.rubric.hardGates.failOnDeletedTests && (input.diff.deletedAssertions > 0 || removedTests.length > 0)) ||
     input.diff.addedSkips > 0
   ) {
     verdict = "REJECT";

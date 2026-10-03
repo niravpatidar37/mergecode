@@ -3,18 +3,11 @@ import { tmpdir } from "node:os";
 import { basename, join, relative, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 
-// Build output, caches and VCS metadata: never needed to judge a patch and often huge.
-const EXCLUDES = new Set([
-  ".git",
-  "node_modules",
-  ".mergecode",
-  "dist",
-  "coverage",
-  "target",
-  ".venv",
-  "__pycache__",
-  ".pytest_cache",
-]);
+// VCS metadata, installed dependencies and caches: excluded at any depth.
+const EXCLUDE_ANYWHERE = new Set([".git", "node_modules", ".venv", "__pycache__", ".pytest_cache"]);
+// Build output: excluded only at the repo root, so source dirs such as src/dist/ or
+// pkg/target/ are still copied (otherwise a patch touching them could not apply).
+const EXCLUDE_AT_ROOT = new Set([".mergecode", "dist", "coverage", "target"]);
 
 export interface Workspace {
   path: string;
@@ -30,14 +23,15 @@ export function createWorkspace(repoPath: string, keep = false): Workspace {
   try {
     cpSync(repoPath, target, {
       recursive: true,
-      // Symlinks are copied as links, never followed, so a link in the repo cannot
-      // pull files from outside it into the workspace.
+      // Symlinks are copied as links rather than followed, so the copy itself never
+      // reads outside the repo. Absolute links still point outside the workspace.
       verbatimSymlinks: true,
       filter: (src) => {
-        const rel = relative(repoPath, src);
-        // Only exclude by path *inside* the repo, so a repo that itself lives under
+        // Judge by the path *inside* the repo, so a repo that itself lives under
         // e.g. /home/me/dist/ is still copied.
-        return !rel.split(sep).some((part) => EXCLUDES.has(part));
+        const parts = relative(repoPath, src).split(sep);
+        if (parts[0] !== undefined && EXCLUDE_AT_ROOT.has(parts[0])) return false;
+        return !parts.some((part) => EXCLUDE_ANYWHERE.has(part));
       },
     });
   } catch (err) {

@@ -73,6 +73,15 @@ describe("renderMarkdown", () => {
     expect(out).not.toMatch(/admin@evil/);
   });
 
+  it("strips bidi and control characters from finding file paths", () => {
+    const md = renderMarkdown(
+      baseRun({
+        findings: [{ severity: "medium", category: "risk", title: "t", detail: "d", file: "src/a\u202egnp.ts\u0007" }],
+      }),
+    );
+    expect(md).toContain("(`src/agnp.ts`)");
+  });
+
   it("caps very large reports below GitHub's comment limit", () => {
     const files = Array.from({ length: 5000 }, (_, i) => ({
       path: `src/very/long/path/number/${i}/file-with-a-long-name.ts`,

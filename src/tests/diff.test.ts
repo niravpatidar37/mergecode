@@ -122,6 +122,63 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
     );
     expect(summary.addedSkips).toBe(4);
   });
+
+  it("sees CI and dependency files on the old side of a pure rename", () => {
+    const summary = parseUnifiedDiff(
+      "diff --git a/.github/workflows/mergecode.yml b/docs/old.yml\nsimilarity index 100%\nrename from .github/workflows/mergecode.yml\nrename to docs/old.yml\n",
+    );
+    expect(summary.files).toHaveLength(1);
+    expect(summary.files[0]?.path).toBe("docs/old.yml");
+    expect(summary.ciFilesTouched).toEqual([".github/workflows/mergecode.yml"]);
+  });
+
+  it("flags test files renamed to a non-test name or deleted", () => {
+    const summary = parseUnifiedDiff(
+      "diff --git a/src/tests/auth.test.ts b/src/tests/auth.test.ts.bak\nsimilarity index 100%\nrename from src/tests/auth.test.ts\nrename to src/tests/auth.test.ts.bak\n" +
+        "diff --git a/tests/lock.rs b/tests/lock.rs\ndeleted file mode 100644\nindex 1111111..0000000\n--- a/tests/lock.rs\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-#[test]\n-fn t() { assert!(true); }\n",
+    );
+    expect(summary.removedTestFiles).toEqual(["src/tests/auth.test.ts", "tests/lock.rs"]);
+    expect(summary.files.map((f) => f.path)).toEqual(["src/tests/auth.test.ts.bak", "tests/lock.rs"]);
+    expect(summary.deletedAssertions).toBe(1);
+  });
+
+  it("decodes C-quoted paths and keeps files with special names apart", () => {
+    const summary = parseUnifiedDiff(
+      'diff --git "a/.github/workflows/d\\303\\251ploy.yml" "b/.github/workflows/d\\303\\251ploy.yml"\n--- "a/.github/workflows/d\\303\\251ploy.yml"\n+++ "b/.github/workflows/d\\303\\251ploy.yml"\n@@ -1 +1 @@\n-a\n+b\n' +
+        'diff --git "a/src/\\"q\\".ts" "b/src/\\"q\\".ts"\n--- "a/src/\\"q\\".ts"\n+++ "b/src/\\"q\\".ts"\n@@ -1 +1 @@\n-a\n+b\n',
+    );
+    expect(summary.ciFilesTouched).toEqual([".github/workflows/déploy.yml"]);
+    expect(summary.files.map((f) => f.path)).toEqual([".github/workflows/déploy.yml", 'src/"q".ts']);
+  });
+
+  it("counts unittest-style assertion deletions", () => {
+    const summary = parseUnifiedDiff(
+      fileDiff("tests/test_lock.py", "-        self.assertEqual(a, b)\n-        self.assertIn(x, y)\n+        pass"),
+    );
+    expect(summary.deletedAssertions).toBe(2);
+  });
+
+  it("does not treat Rust Result::expect or prose as assertions", () => {
+    const summary = parseUnifiedDiff(
+      fileDiff("tests/io.rs", '-    let f = File::open(p).expect("open");\n-    // this should never happen\n+    let f = File::open(p)?;'),
+    );
+    expect(summary.deletedAssertions).toBe(0);
+  });
+
+  it("does not treat an ordinary fit(...) call as a focused test", () => {
+    const summary = parseUnifiedDiff(
+      fileDiff("src/train.py", "+    fit(model, data)\n+    def fit(self, X, y):") +
+        fileDiff("src/a.test.ts", "+fit('focused', () => {});"),
+    );
+    expect(summary.addedSkips).toBe(1);
+  });
+
+  it("uses the hunk header's function context to spot Rust test modules", () => {
+    const summary = parseUnifiedDiff(
+      "diff --git a/src/lock.rs b/src/lock.rs\n--- a/src/lock.rs\n+++ b/src/lock.rs\n@@ -120,4 +120,3 @@ mod tests {\n     let x = parse();\n-    assert_eq!(x, 1);\n     drop(x);\n",
+    );
+    expect(summary.deletedAssertions).toBe(1);
+  });
 });
 
 describe("classify", () => {

@@ -24,6 +24,9 @@ describe("scrubEnv", () => {
         GITHUB_STEP_SUMMARY: "/runner/_temp/summary",
         ACTIONS_RESULTS_URL: "https://x",
         GITHUB_SHA: "abc",
+        DATABASE_URL: "postgres://u:p@h/db",
+        SENTRY_DSN: "https://k@sentry",
+        GH_PAT: "ghp_x",
       },
       ["MY_CUSTOM_LLM"],
     );
@@ -66,5 +69,19 @@ describe("runVerification", () => {
     const [result] = await runVerification(cwd, [`node -e "process.exit(3)"`], 30_000);
     expect(result?.exitCode).toBe(3);
     expect(result?.timedOut).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("kills background processes a command leaves behind", async () => {
+    const [result] = await runVerification(
+      cwd,
+      [
+        `node -e "const c=require('child_process').spawn(process.execPath,['-e','setTimeout(()=>{},60000)'],{stdio:'ignore'});c.unref();console.log(c.pid)"`,
+      ],
+      30_000,
+    );
+    const pid = Number(result?.stdoutHead.trim());
+    expect(pid).toBeGreaterThan(0);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(() => process.kill(pid, 0)).toThrow();
   });
 });
