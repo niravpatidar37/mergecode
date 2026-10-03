@@ -1,58 +1,140 @@
 name: mergecode
 
+# Judges every pull request with MergeCode and posts the verdict as a sticky comment.
+#
+# Trust model:
+#   * The judge (MergeCode itself) and its config are built from the BASE commit, so a
+#     PR cannot weaken the judge that evaluates it.
+#   * The `judge` job runs PR code (verification commands) with a read-only token and
+#     no secrets. Its output is treated as untrusted by the `comment` job.
+#   * The `comment` job holds `pull-requests: write` but never executes PR code. It is
+#     skipped for fork PRs (their token is read-only anyway).
+
 on:
   pull_request:
 
-permissions:
-  contents: read
-  pull-requests: write
+permissions: {}
+
+concurrency:
+  group: mergecode-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   judge:
-    runs-on: ubuntu-latest
+    name: judge
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          # refs/pull/N/merge plus its first parent (the base tip).
+          fetch-depth: 2
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
 
-      - run: npm ci
-      - run: npm run build
-
-      - name: Build PR diff and task
+      - name: Prepare base worktree, PR diff and task
         env:
           TASK_TITLE: ${{ github.event.pull_request.title }}
           TASK_BODY: ${{ github.event.pull_request.body }}
         run: |
-          git diff "origin/${{ github.base_ref }}...HEAD" > pr.diff
-          printf '%s\n\n%s\n' "$TASK_TITLE" "$TASK_BODY" > task.md
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/base" HEAD^1
+          git diff --binary HEAD^1 HEAD > "$RUNNER_TEMP/pr.diff"
+          printf '%s\n\n%s\n' "$TASK_TITLE" "$TASK_BODY" > "$RUNNER_TEMP/task.md"
+          mkdir -p "$RUNNER_TEMP/out"
 
-      - name: Run mergecode judge
+      - name: Build the judge from the base commit
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/base"
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+
+      - name: Judge
         id: judge
-        continue-on-error: true
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: node dist/cli.js judge --repo . --task task.md --patch pr.diff --config mergecode.yaml
+        run: |
+          set +e
+          node "$RUNNER_TEMP/base/dist/cli.js" judge \
+            --repo "$RUNNER_TEMP/base" \
+            --task "$RUNNER_TEMP/task.md" \
+            --patch "$RUNNER_TEMP/pr.diff" \
+            --out "$RUNNER_TEMP/out"
+          code=$?
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+          exit 0
 
-      - name: Post verdict comment
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
-        uses: actions/github-script@v7
+        with:
+          name: mergecode-report
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Enforce verdict
+        # 0 MERGE, 1 REQUEST_CHANGES (advisory), 2 REJECT, 3 error. Fail closed on 2/3/missing,
+        # and on 0/1 without a report (a crash also exits non-zero).
+        env:
+          EXIT_CODE: ${{ steps.judge.outputs.exit }}
+        run: |
+          if [ ! -s "$RUNNER_TEMP/out/report.md" ]; then
+            echo "::error::MergeCode did not produce a report (exit '$EXIT_CODE')"; exit 1
+          fi
+          case "$EXIT_CODE" in
+            0|1) echo "MergeCode verdict exit code: $EXIT_CODE" ;;
+            2) echo "::error::MergeCode verdict: REJECT"; exit 1 ;;
+            *) echo "::error::MergeCode did not produce a verdict (exit '$EXIT_CODE')"; exit 1 ;;
+          esac
+
+  comment:
+    name: comment
+    needs: judge
+    if: >-
+      always() &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (needs.judge.result == 'success' || needs.judge.result == 'failure')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write # create/update the single sticky verdict comment
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with:
+          name: mergecode-report
+          path: ${{ runner.temp }}/out
+
+      - name: Post or update the verdict comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          REPORT_DIR: ${{ runner.temp }}/out
         with:
           script: |
             const fs = require("fs");
             const path = require("path");
-            const runsDir = path.join(".mergecode", "runs");
-            if (!fs.existsSync(runsDir)) return;
-            const latest = fs.readdirSync(runsDir).sort().at(-1);
-            const reportPath = path.join(runsDir, latest, "report.md");
-            if (!fs.existsSync(reportPath)) return;
-            const body = fs.readFileSync(reportPath, "utf8");
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body,
+            const marker = "<!-- mergecode-verdict -->";
+            const file = path.join(process.env.REPORT_DIR, "report.md");
+            // The report was produced in a job that ran PR code: treat it as untrusted text.
+            let report = fs.existsSync(file)
+              ? fs.readFileSync(file, "utf8")
+              : "# MergeCode\n\nThe judge did not produce a report. See the workflow logs.";
+            report = report.replaceAll(marker, "").slice(0, 60000);
+            const body = `${marker}\n${report}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
             });
+            const existing = comments.find(
+              (c) => c.user?.login === "github-actions[bot]" && c.body?.startsWith(marker),
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

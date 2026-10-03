@@ -1,62 +1,164 @@
 import { readFileSync } from "node:fs";
 import type { DiffSummary, FileChange } from "./types.js";
 
-function classify(path: string): FileChange["category"] {
-  const base = path.split("/").pop() ?? path;
-  if (/^(package|pnpm|yarn|bun)-lock\./.test(base) || base === "package.json") return "dependency";
-  if (path.startsWith(".github/workflows/") || path.includes(".gitlab-ci") || path.includes(".circleci")) return "ci";
-  if (/(\.config\.|config\.|tsconfig|vite\.config|webpack\.config|eslint|prettier)/i.test(path)) return "config";
-  if (/\.(test|spec)\.[jt]sx?$/.test(path) || path.includes("__tests__") || path.includes("/tests/")) return "test";
-  if (/\.(md|mdx|txt|rst)$/.test(path)) return "docs";
-  if (/\.[jt]sx?$|\.py$|\.go$|\.rs$|\.java$|\.rb$/.test(path)) return "source";
+// Dependency manifests and lockfiles across the ecosystems MergeCode is likely to judge.
+const DEPENDENCY_FILES = new Set([
+  "package.json",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+  "bun.lock",
+  "bun.lockb",
+  "Cargo.toml",
+  "Cargo.lock",
+  "pyproject.toml",
+  "uv.lock",
+  "poetry.lock",
+  "Pipfile",
+  "Pipfile.lock",
+  "setup.py",
+  "setup.cfg",
+  "go.mod",
+  "go.sum",
+  "Gemfile",
+  "Gemfile.lock",
+  "pom.xml",
+  "build.gradle",
+  "build.gradle.kts",
+]);
+
+// Tooling / build configuration that changes how code is checked or built.
+const CONFIG_FILES = new Set([
+  "deny.toml",
+  "rust-toolchain",
+  "rust-toolchain.toml",
+  "rustfmt.toml",
+  ".rustfmt.toml",
+  "clippy.toml",
+  ".clippy.toml",
+  ".editorconfig",
+  ".npmrc",
+  ".nvmrc",
+  "Makefile",
+  "Dockerfile",
+]);
+
+function basename(path: string): string {
+  return path.split("/").pop() ?? path;
+}
+
+export function classify(path: string): FileChange["category"] {
+  const base = basename(path);
+  if (DEPENDENCY_FILES.has(base) || /^requirements([-_.].*)?\.txt$/.test(base)) return "dependency";
+  if (path.startsWith(".github/") || path.includes(".gitlab-ci") || path.startsWith(".circleci/")) return "ci";
+  if (
+    CONFIG_FILES.has(base) ||
+    path.startsWith(".cargo/") ||
+    /^tsconfig.*\.json$/.test(base) ||
+    /\.config\.[cm]?[jt]s$/.test(base) ||
+    /^\.(eslintrc|prettierrc|babelrc|swcrc)/.test(base)
+  ) {
+    return "config";
+  }
+  if (
+    /\.(test|spec)\.[cm]?[jt]sx?$/.test(base) ||
+    /^test_.*\.py$|_test\.py$/.test(base) ||
+    /_test\.go$/.test(base) ||
+    /(^|\/)(tests?|__tests__|spec)\//.test(path)
+  ) {
+    return "test";
+  }
+  if (/\.(md|mdx|txt|rst|adoc)$/.test(base)) return "docs";
+  if (/\.([cm]?[jt]sx?|py|go|rs|java|kt|rb|cs|c|cc|cpp|h|hpp|swift|php)$/.test(base)) return "source";
   return "unknown";
 }
 
-function isAssertion(line: string): boolean {
-  return /\b(expect|assert|should|toBe|toEqual|assertEquals|assertTrue)\b/.test(line);
-}
+// Assertion-like lines across JS/TS (vitest/jest), Python (assert/pytest/unittest),
+// Rust (assert!/assert_eq!/prop_assert!...) and Go (testify).
+const ASSERTION =
+  /\b(expect|should|toBe|toEqual|assertEquals|assertTrue|assertFalse|assertRaises|require\.\w+|assert\.\w+)\b|\bassert\b(?!_)|\b(?:debug_|prop_)?assert(?:_eq|_ne|_matches)?!|\bpytest\.raises\b/;
 
-function isSkip(line: string): boolean {
-  return /\b(describe|it|test)\.skip\b|\.only\b/.test(line);
+// Markers that disable or narrow tests.
+const SKIP =
+  /\b(describe|it|test)\.(skip|only|todo)\b|(?<![.\w])(xit|xdescribe|fit|fdescribe)\(|#\[ignore\b|@pytest\.mark\.(skip|skipif|xfail)\b|\bpytest\.(skip|xfail)\(|@unittest\.skip|\bt\.Skip(Now|f)?\(/;
+
+// Rust unit tests live next to the code they test.
+const RUST_INLINE_TEST = /#\[(?:[\w:]+::)?test\]|#\[cfg\(test\)\]|\bproptest!/;
+
+interface FileState extends FileChange {
+  hasInlineTests: boolean;
+  addedInlineTests: boolean;
+  candidateDeletedAssertions: number;
 }
 
 export function parseUnifiedDiff(raw: string): DiffSummary {
-  const files = new Map<string, FileChange>();
-  let current: FileChange | undefined;
+  const files = new Map<string, FileState>();
+  let current: FileState | undefined;
+  let inHunk = false;
 
-  for (const line of raw.split("\n")) {
+  for (const rawLine of raw.split("\n")) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
     if (line.startsWith("diff --git ")) {
       const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
       const path = match?.[2] ?? "unknown";
+      const category = classify(path);
       current = {
         path,
         added: 0,
         deleted: 0,
-        isTest: classify(path) === "test",
-        category: classify(path),
+        isTest: category === "test",
+        category,
         deletedAssertions: 0,
         addedSkips: 0,
+        hasInlineTests: false,
+        addedInlineTests: false,
+        candidateDeletedAssertions: 0,
       };
       files.set(path, current);
+      inHunk = false;
       continue;
     }
     if (!current) continue;
-    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      continue;
+    }
+    // Header lines (---/+++, index, mode, rename) only appear before the first hunk.
+    if (!inHunk) continue;
+
+    const body = line.slice(1);
+    if (current.path.endsWith(".rs") && RUST_INLINE_TEST.test(body)) current.hasInlineTests = true;
+
     if (line.startsWith("+")) {
       current.added++;
-      if (isSkip(line)) current.addedSkips++;
+      if (SKIP.test(body)) current.addedSkips++;
+      if (current.path.endsWith(".rs") && RUST_INLINE_TEST.test(body)) current.addedInlineTests = true;
     } else if (line.startsWith("-")) {
       current.deleted++;
-      if (current.isTest && isAssertion(line)) current.deletedAssertions++;
+      if (ASSERTION.test(body)) current.candidateDeletedAssertions++;
     }
   }
 
-  const list = [...files.values()];
+  const list: FileChange[] = [...files.values()].map((f) => {
+    const testy = f.isTest || f.hasInlineTests;
+    return {
+      path: f.path,
+      added: f.added,
+      deleted: f.deleted,
+      isTest: f.isTest,
+      category: f.category,
+      deletedAssertions: testy ? f.candidateDeletedAssertions : 0,
+      addedSkips: f.addedSkips,
+      touchesTests: f.isTest || f.addedInlineTests,
+    };
+  });
+
   return {
     files: list,
     totalAdded: list.reduce((sum, f) => sum + f.added, 0),
     totalDeleted: list.reduce((sum, f) => sum + f.deleted, 0),
-    testFilesTouched: list.filter((f) => f.isTest).length,
+    testFilesTouched: list.filter((f) => f.touchesTests).length,
     dependencyFilesTouched: list.filter((f) => f.category === "dependency").map((f) => f.path),
     configFilesTouched: list.filter((f) => f.category === "config").map((f) => f.path),
     ciFilesTouched: list.filter((f) => f.category === "ci").map((f) => f.path),
@@ -68,4 +170,3 @@ export function parseUnifiedDiff(raw: string): DiffSummary {
 export function parseDiffFile(path: string): DiffSummary {
   return parseUnifiedDiff(readFileSync(path, "utf8"));
 }
-

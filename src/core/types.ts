@@ -47,6 +47,8 @@ export interface FileChange {
   category: "source" | "test" | "dependency" | "config" | "ci" | "docs" | "unknown";
   deletedAssertions: number;
   addedSkips: number;
+  /** True for test files, and for source files whose diff adds inline tests (e.g. Rust #[test]). */
+  touchesTests?: boolean;
 }
 
 export interface DiffSummary {
