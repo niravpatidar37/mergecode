@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_REPORT_CHARS, renderMarkdown } from "../core/report.js";
+import { MAX_REPORT_CHARS, inert, renderMarkdown } from "../core/report.js";
 import type { JudgeRun } from "../core/types.js";
 
 function baseRun(overrides: Partial<JudgeRun> = {}): JudgeRun {
@@ -65,6 +65,12 @@ describe("renderMarkdown", () => {
     expect(md).not.toContain("<b>");
     expect(md).not.toMatch(/(^|\s)@someone/);
     expect(md).not.toMatch(/^#+ (Fake heading|injected)/m);
+  });
+
+  it("defangs GitHub extended autolinks (www. and emails) in untrusted text", () => {
+    const out = inert("see www.evil.example/login or WWW.Evil.example and mail admin@evil.example");
+    expect(out).not.toMatch(/www\./i);
+    expect(out).not.toMatch(/admin@evil/);
   });
 
   it("caps very large reports below GitHub's comment limit", () => {
