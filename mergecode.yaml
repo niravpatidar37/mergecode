@@ -1,8 +1,12 @@
 version: 1
 verify:
+  # The judge runs in a fresh copy of the repo without node_modules,
+  # so dependencies are installed first (from the lockfile, no install scripts).
   commands:
+    - npm ci --ignore-scripts --no-audit --no-fund
     - npm run typecheck
     - npm test
+  timeoutMs: 300000
 rubric:
   hardGates:
     failOnVerificationFailure: true
