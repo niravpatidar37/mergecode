@@ -8,8 +8,17 @@ updates:
     cooldown:
       default-days: 7
     groups:
-      npm:
+      # Minor/patch updates are batched. Major updates are NOT grouped: each one
+      # arrives as its own PR so a breaking change cannot hold safe patches hostage
+      # and each gets its own MergeCode verdict.
+      npm-minor-patch:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # Types must match the oldest supported runtime (engines.node >= 20), or code
+      # could compile against APIs that do not exist there. Bump with engines.node.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "build(deps)"
 
@@ -20,7 +29,8 @@ updates:
     cooldown:
       default-days: 7
     groups:
-      actions:
+      actions-minor-patch:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: "ci(deps)"
