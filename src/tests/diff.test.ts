@@ -92,6 +92,20 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
     const summary = parseUnifiedDiff(fileDiff("src/app.ts", "-  // expect this to be fast\n+  // fast"));
     expect(summary.deletedAssertions).toBe(0);
   });
+
+  it("does not count skip markers mentioned in docs or config", () => {
+    const summary = parseUnifiedDiff(
+      fileDiff("README.md", "+| Skipped tests: `.skip`, `#[ignore]`, `@pytest.mark.skip`, `t.Skip()` |") +
+        fileDiff("docs/guide.txt", "+Use it.skip(...) sparingly") +
+        fileDiff(".github/workflows/ci.yml", "+  # test.only is banned"),
+    );
+    expect(summary.addedSkips).toBe(0);
+  });
+
+  it("still counts skip markers in Rust inline tests in source files", () => {
+    const summary = parseUnifiedDiff(fileDiff("src/lock.rs", "+    #[ignore]\n+    #[test]\n+    fn flaky() {}"));
+    expect(summary.addedSkips).toBe(1);
+  });
 });
 
 describe("classify", () => {

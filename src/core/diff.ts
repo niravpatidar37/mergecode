@@ -132,7 +132,8 @@ export function parseUnifiedDiff(raw: string): DiffSummary {
 
     if (line.startsWith("+")) {
       current.added++;
-      if (SKIP.test(body)) current.addedSkips++;
+      // Only code can skip a test; docs that *mention* `.skip` or `#[ignore]` must not count.
+      if ((current.category === "test" || current.category === "source") && SKIP.test(body)) current.addedSkips++;
       if (current.path.endsWith(".rs") && RUST_INLINE_TEST.test(body)) current.addedInlineTests = true;
     } else if (line.startsWith("-")) {
       current.deleted++;

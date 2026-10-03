@@ -25,7 +25,9 @@ export function inert(text: string, max = MAX_FIELD): string {
     .replace(/>/g, "&gt;")
     .replace(/[\\`*_\[\]#~]/g, (c) => `\\${c}`)
     .replace(/@/g, "@\u200b")
-    .replace(/:\/\//g, ":\u200b//");
+    .replace(/:\/\//g, ":\u200b//")
+    // GitHub's extended autolinks also link bare `www.` hosts.
+    .replace(/\bwww\./gi, (m) => `${m.slice(0, 3)}\u200b.`);
 }
 
 export function renderMarkdown(run: JudgeRun): string {
