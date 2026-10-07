@@ -102,6 +102,12 @@ function assertionPattern(path: string): RegExp {
 const SKIP =
   /^\s*(?:(?:describe|it|test)\.(?:skip|only|todo)\b|(?:xit|xdescribe|fit|fdescribe)\(\s*['"`]|#\[ignore\b|@pytest\.mark\.(?:skip|skipif|xfail)\b|pytest\.(?:skip|xfail)\(|@unittest\.skip|t\.Skip(?:Now|f)?\()/;
 
+// `@pytest.mark.skipif(<one platform check against a string literal>, ...)` gates a
+// platform-specific test; it is not a disabled test. Anything more in the condition
+// (`or True`, flags) still counts.
+const PLATFORM_SKIPIF =
+  /^\s*@pytest\.mark\.skipif\(\s*(?:not\s+)?(?:sys\.platform|os\.name|platform\.system\(\))\s*(?:\.startswith\(\s*(['"])[^'"]*\1\s*\)|(?:==|!=)\s*(['"])[^'"]*\2)\s*(?:,|\))/;
+
 // Rust unit tests live next to the code they test.
 const RUST_INLINE_TEST = /#\[(?:[\w:]+::)?test\]|#\[cfg\(test\)\]|\bproptest!|\bmod tests\b/;
 
@@ -220,7 +226,8 @@ export function parseUnifiedDiff(raw: string): DiffSummary {
     if (line.startsWith("+")) {
       current.added++;
       // Only code can skip a test; docs that *mention* `.skip` or `#[ignore]` must not count.
-      if ((category === "test" || category === "source") && SKIP.test(body)) current.addedSkips++;
+      if ((category === "test" || category === "source") && SKIP.test(body) && !PLATFORM_SKIPIF.test(body))
+        current.addedSkips++;
       if (path.endsWith(".rs") && RUST_INLINE_TEST.test(body)) current.addedInlineTests = true;
     } else if (line.startsWith("-")) {
       current.deleted++;

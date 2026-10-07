@@ -123,6 +123,25 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
     expect(summary.addedSkips).toBe(4);
   });
 
+  it("does not count pytest skipif gated purely on the platform", () => {
+    const summary = parseUnifiedDiff(
+      fileDiff(
+        "e2e/test_a.py",
+        [
+          '+@pytest.mark.skipif(sys.platform.startswith("linux"), reason="Windows-only check")',
+          "+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux backend')",
+          '+@pytest.mark.skipif(sys.platform == "win32", reason="x")',
+          '+@pytest.mark.skipif(os.name != "nt", reason="x")',
+          // Still counted: anything beyond a single platform comparison.
+          '+@pytest.mark.skipif(sys.platform == "win32" or True, reason="x")',
+          '+@pytest.mark.skipif(FLAKY, reason="x")',
+          "+@pytest.mark.skipif(True, reason='later')",
+        ].join("\n"),
+      ),
+    );
+    expect(summary.addedSkips).toBe(3);
+  });
+
   it("sees CI and dependency files on the old side of a pure rename", () => {
     const summary = parseUnifiedDiff(
       "diff --git a/.github/workflows/mergecode.yml b/docs/old.yml\nsimilarity index 100%\nrename from .github/workflows/mergecode.yml\nrename to docs/old.yml\n",
